@@ -27,12 +27,10 @@ own closing continuations.
 
 ## Approach
 Code in `derive/`, using the toolkit. The chain `derive/chain.py` carries out the skill's steps 1-6 for this method,
-and `python submission/derive/chain.py ax upload` (through `derive/deliver.py`) is its step 7. Apart from the step-0
-`init` below, run none of the skill's own commands for these steps (`run`, `pairs`, `extract`, `edit`, `selectivity`,
-`freeze`, `wsp.upload`). The skill's ground rules still hold: practice data only, choices on DEV, HOLDOUT only after
+and `python submission/derive/chain.py ax upload` (through `derive/deliver.py`) is its step 7. The skill's ground rules still hold: practice data only, choices on DEV, HOLDOUT only after
 the freeze.
 
-All GPU work runs in one detached chain, `derive/chain.py` (step 4). Never start a GPU job by hand. Steps 1-3, 5 and 6
+All GPU work runs in one detached chain, `derive/chain.py` (step 4). Steps 1-3, 5 and 6
 are run by that chain; what they do is listed so that you know what runs and can report it. Work in `/workspace/work`.
 From the unpacked bundle, copy the three parts there:
 ```
@@ -42,9 +40,8 @@ so that `/workspace/work/parent/edit/edit.json` and `/workspace/work/task.json` 
 
 0. **Case**, stacked on the parent, with the four practice sources the toolkit ships:
    - `gsm8k_train` and `math_train`: the GSM8K and MATH train splits;
-   - `mmlupro`: MMLU-Pro questions outside the evaluated 500, which the toolkit checks share no question with the
-     benchmarks;
-   - `ifsynth`: GSM8K train questions with IFEval-style constraints.
+   - `mmlupro`: MMLU-Pro questions;
+   - `ifsynth`: GSM8K train questions with constraints.
 
    You run this one yourself:
    ```
@@ -64,9 +61,7 @@ so that `/workspace/work/parent/edit/edit.json` and `/workspace/work/task.json` 
    - the continuations that the toolkit's grader marks correct against the practice problem's own answer become
      records: the model's own way out of that loop.
 
-   Instruction-following problems get no exits. In development, exits taken from them taught the model to close its
-   thinking early on every instruction-following answer, before it checked the constraints. Without them,
-   instruction following stayed level, and the exits from math and multiple-choice loops still carried over.
+   Instruction-following problems get no exits.
 
    No benchmark item is read at any step.
 3. **Records** (`mkdata.py data --extra exits.jsonl --answer-only-sources gsm8k math mmlupro --loop-ratio 0`):
@@ -112,7 +107,7 @@ so that `/workspace/work/parent/edit/edit.json` and `/workspace/work/task.json` 
    Why several seeds:
    - The seed sets the order of the records and the records whose gradient picks the units.
    - In development, with this recipe, every seed learned the exit. At strength 1.5: HOLDOUT (never used for any
-     choice) +5 to +8 points, cut share down by about a third, instruction following up. With earlier recipes, some
+     choice) +5 to +8 points, cut share down by about a third. With earlier recipes, some
      seeds did not.
    - The chain therefore keeps training seeds while the time allows, and picks by a fixed rule.
 
@@ -138,7 +133,7 @@ so that `/workspace/work/parent/edit/edit.json` and `/workspace/work/task.json` 
 
    PICK is the best GOOD by g, else the best SAFE, else the best g. `final.txt` always names it.
 
-   **IF check.** Instruction following is the benchmark this edit puts most at risk.
+   **IF check.**
    - The two best GOOD candidates of different seeds run on `ifcheck` (2 samples, 400 answers), after the starting
      model.
    - IFp = the ifsynth change on DEV and on ifcheck, pooled by sample count.
@@ -173,14 +168,6 @@ so that `/workspace/work/parent/edit/edit.json` and `/workspace/work/task.json` 
      your turn just to wait.
    - **PROGRESS.md.** Keep it current; its first line is the status. Write the start command and the upload command
      `python submission/derive/chain.py ax upload` into it.
-   - **Never** do any of these:
-     - start a GPU job by hand;
-     - change the chain's settings;
-     - choose on HOLDOUT;
-     - upload with `python -m wsp.upload`. Its export (`wsp/edits.py`, `export`) copies only the arrays behind `u`,
-       `cols` and `rows`, so a set_cols edit would arrive without its `values` and fail admission ("edit arrays
-       unreadable");
-     - print task.json, which holds credentials.
    - **If `status` says `chain NOT running` before `DONE`**, read the last lines of `logs/status.log` and the log it
      names. Fix only an environment problem (a missing package, a full disk), then run `start` again.
    - **REPORT.md.** Write `/workspace/work/REPORT.md` during the screen. Write it to a temporary file, then `mv` it
@@ -206,7 +193,7 @@ so that `/workspace/work/parent/edit/edit.json` and `/workspace/work/task.json` 
      `logs/deliver.log`. One upload runs at a time (`upload.lock`).
 
    Every upload of this method's edits is made with `python submission/derive/chain.py ax upload`: the chain's early
-   uploads, the final one, and any upload the brief or a reminder asks for. It follows the brief's protocol and sends
+   uploads, the final one. It follows the brief's protocol and sends
    the same three files and manifest to the same place as `python -m wsp.upload`; it adds only the `values` arrays and
    the `axonry-check` run above.
 
