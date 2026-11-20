@@ -56,22 +56,3 @@ Genres: advice 44, description 47, dialogue 50, email 47, how-to 44, letter 42, 
   test; the other types use the registry wording and one paraphrase in fit, and two other paraphrases in test.
   The registry wording never appears in test.
 
-## Decontamination
-Every prompt passed the exclusion bars below, set after the templates, types and counts were fixed; none was
-rejected. Nothing in this file is taken from evaluation text, and the method never reads any.
-- The constraint sentences are removed from each prompt first; the remaining request text is compared.
-- A prompt is rejected if its char 5-gram TF-IDF cosine is >= 0.5 with any benchmark prompt. Each
-  benchmark prompt is compared whole, and again with its constraint-like sentences removed. The TF-IDF
-  vocabulary is built from the candidates and these benchmark prompts, only to measure similarity; nothing from
-  the benchmark is in this file.
-- A prompt is rejected if it shares any word 8-gram with a benchmark prompt (lowercased alphanumeric
-  words). This check covers the request text and the self-written constraint sentences. Strings supplied by
-  the registry (end phrases, postscript markers) are masked first: like the registry wording, they come from
-  the checker library.
-- A prompt is rejected if its fingerprint (`wsp.data.fingerprint`) is in the toolkit's
-  data/bench_fingerprints.txt.gz.
-- Candidates: 649; rejected: none. The first survivors of each type and split, up to the target counts, are kept:
-  553 prompts.
-- Kept prompts: max cosine at most 0.283 (median 0.140). Longest
-  shared word n-gram: 6 words for the request text, 5 words for the
-  self-written constraint sentences.
