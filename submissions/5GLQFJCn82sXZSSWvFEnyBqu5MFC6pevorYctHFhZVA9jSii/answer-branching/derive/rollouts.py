@@ -111,7 +111,7 @@ def worker(a):
         print(f"[rollouts] {out.name}: complete ({len(plan)} answers)", flush=True)
         return
     items = {}
-    for spec in a.items.split(","):       # practice:all by default; bench:<name> only for a final, one-time check
+    for spec in a.items.split(","):       # practice:all by default
         items.update(data.by_id(spec))
     tok0 = AutoTokenizer.from_pretrained(a.model)
     longest = max(len(tok0(data.user_message(items[p])).input_ids) for p, _ in todo)

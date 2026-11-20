@@ -13,7 +13,7 @@ Standard library only: runs on a laptop, on a GPU box, or in the agent's sandbox
       Paired comparison (same problems and samples): per area gain +- SE (clustered by problem, as wsp.stats),
       rescued / lost, cut share, failure-kind transitions, tokens.
 
-Areas: gsm8k, math, ifsynth (instruction following), mmlupro (multiple choice); benchmark runs keep their own names.
+Areas: gsm8k, math, ifsynth (instruction following), mmlupro (multiple choice).
 """
 import argparse
 import collections
