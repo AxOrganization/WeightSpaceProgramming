@@ -1,0 +1,5 @@
+{
+ "base": "qwen35-0.8b-think",
+ "parent": "champion",
+ "schema": "axonry.entry/1"
+}
