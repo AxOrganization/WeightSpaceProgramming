@@ -62,27 +62,6 @@ scp -F ~/.axonry/ssh/config -r submission <the start's directory> task.json sand
 so that `/workspace/work/task.json` and the start's `edit/edit.json` exist; `cd /workspace/work && python
 submission/derive/start.py` prints the start's path.
 
-**Start the chain** (it creates the case `k1` on the start and the sets, and runs every GPU step itself, in its own
-session; it returns at once):
-```
-cd /workspace/work && bash submission/derive/chain.sh start
-```
-It reads the deadline from `/etc/axonry-deadline`. If `start` prints a deadline that is not the run's real one, stop it
-(`chain.sh stop`), `rm state/deadline` and start it as `DL=$(date -d '<deadline from the brief> UTC' +%s) bash
-submission/derive/chain.sh start`. `start` again resumes where the chain stopped: every finished step is kept
-(`state/*.done`); while the chain runs, `start` changes nothing.
-
-**Check on the chain at least every 10 minutes** (the run's stall rule is 20 minutes), with one command of at most
-9 minutes:
-```
-cd /workspace/work && bash submission/derive/chain.sh status 8
-```
-It returns as soon as the chain writes a new status line (after 8 minutes at most) and prints the last status lines,
-the steps done, what is uploaded and the minutes left. Between checks, write REPORT.md and PROGRESS.md.
-
-**If `status` says `chain NOT running` before `DONE`**: read the last lines of `logs/status.log` and the log it names;
-fix an environment problem inside `/workspace/work` (for example a full disk) and run `start` again.
-
 **The chain's steps** (times are estimates on 4 x RTX 4090):
 | step | what | time |
 |---|---|---|
@@ -97,15 +76,12 @@ A generation that stops is retried once (each has a 40-minute limit). A candidat
 60 minutes left; the choice is made among the candidates screened. Uploads (`chain.sh upload NAME` does the same by
 hand): `python -m wsp.upload k1 NAME --report REPORT.md --task task.json --dry-run`, then `axonry-check` on the
 package's `edit/`, then the upload; one at a time, none with fewer than 8 minutes left. Until `REPORT.md` exists the
-chain uploads an automatic report (`REPORT.auto.md`: every status line and the screen table).
 
 **task.json** holds the upload credentials: keep its contents out of logs, PROGRESS.md and the report.
 
 **At the end.** Once `status` shows `DONE` (or 30 minutes before the deadline if it has not):
 1. Finish `REPORT.md` (section 5), written to a temporary file and moved into place.
-2. If the chain is not `DONE`: `bash submission/derive/chain.sh stop` (it waits for an upload in progress).
 3. Upload the final choice with the finished report, no later than 20 minutes before the deadline:
-   `bash submission/derive/chain.sh upload $(cat state/final.txt 2>/dev/null || cat state/uploaded.txt)`.
 4. If `status` shows that upload and nothing is left worth trying, run `axonry-done`.
 
 ## 5. REPORT.md
