@@ -133,8 +133,6 @@ one to three draws per model:
   protected against 75.6% and 75.8% not protected: within their errors of each other and of the start (a draw of
   1,600 answers has a standard error of about one point). The held-out requests gain as much with it (the table
   above is the protected round);
-- the published score of `0009559255-0006`, whose round is not protected, reads the same way: ifeval +1.94 against
-  the champion, gsm8k -1.90, mmlupro -2.20.
 
 Stop rule. Fewer than 400 pairs: this start does not offer what the method learns from; say so in the report and
 deliver nothing (the start then needs no second round).
@@ -284,7 +282,7 @@ the running generation jobs by PID), write what was read so far into REPORT.md, 
 | A round at the dose 0.7 (fitted on our first request set) | the shipped one-instruction requests stay at the start's level (+0.1 ± 1.1); math -2.2, word problems -1.9 |
 | Requests built mostly on word problems (our first request set: half of the bodies `ifsynth` word problems, three quarters of the requests with three instructions) | the shipped one-instruction requests +0.6 ± 1.0 instead of +4.2 |
 | A request set without the three types that only `tuluif` has (our second set) | a round fitted without a type does not leave it alone: the n-th-paragraph type reads -1 on the shipped requests instead of +12, the repeat type -6 on bare tasks instead of +19 |
-| The dead-end unit of this start put on the champion's line (`0009554110-0010`), as `0009559255-0006` does | on 400 math problems x 4: 63.5% against 63.5% (three draws of that model). The cut answers go from 4.6% to 0.8%, and the answers that end without a boxed result from 5.7% to 9.1% (its published math score: -0.05 against the champion) |
+| The dead-end unit of this start put on the champion's line (`0009554110-0010`), as `0009559255-0006` does | on 400 math problems x 4: 63.5% against 63.5% (three draws of that model). The cut answers go from 4.6% to 0.8%, and the answers that end without a boxed result from 5.7% to 9.1% |
 | Boxing a result that a finished answer states in plain text | 2.9% of this start's math answers finish without a box; in 20% of those the stated value is right: 0.6 points at most |
 | A lower sampling temperature, read as a ceiling (0.3 instead of 0.6) | math +0.3, word problems -0.3, multiple choice +0.6: nothing to distil |
 | Keeping the first stated answer on word problems | the last switch of the stated answer in a thinking goes from wrong to right twice as often as from right to wrong (6.4% against 3.2% of all answers) |
