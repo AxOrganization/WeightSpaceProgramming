@@ -7,7 +7,7 @@ one edit on that start. Two layers re-derive published methods with their own sc
 |---|---|---|
 | L1 | reversed shortcut: the policy gradient of the start's own maths answers, reversed (thinks longer, finishes more) | method and scripts of `0009554110-0010` (`derive/mkdata.py`, `shard_gen.py`, `svf_len.py`, `lendose.py`, `start.py`, unchanged) |
 | BR | answer-branch preference gains for instruction requests | method and scripts of `0009552831-0015` (`derive/sets.py`, `fit_gains.py` unchanged; `branch2.py`, `pref_gains2.py` are its `branch.py`, `pref_gains.py` with the additions described below) |
-| EC | **early-decision credit** for maths: preference gains fitted on same-prefix continuation pairs taken from early points of the thinking, with the loss restricted to the stretch right after the branch | this entry (`derive/run.sh` steps `ec_*`, `merge_gains.py`, the `--window` / `--bad-cut` / `--points` options of `pref_gains2.py`, the `right` kind of `branch2.py`) |
+| EC | **early-decision credit** for maths: preference gains fitted on same-prefix continuation pairs taken from early points of the thinking, with the loss restricted to the stretch right after the branch | this entry (`merge_gains.py`, the `--window` / `--bad-cut` / `--points` options of `pref_gains2.py`, the `right` kind of `branch2.py`) |
 
 ## 1. The failure: a maths answer is decided during the first half of the thinking
 
@@ -51,7 +51,7 @@ prefix yields pairs that differ only in what was decided after the branch.
    `pref_gains.py`), DPO-style preference (beta 0.1) plus a small NLL term on the correct continuation, **with the loss
    restricted to the first 2048 tokens after the branch point** (`--window 2048`). Four fits, seeds 1-4, 2 epochs.
 6. **Strength, chosen in the run.** The four fits' log gains are averaged. How far the same gains move the thinking
-   differs from build to build, so the strength is chosen on fresh practice maths (`run.sh` step `ec_dose`): the
+   differs from build to build, so the strength is chosen on fresh practice maths: the
    gains are merged at 0.5, 0.75 and 1.0, and the L1 + BR model and each candidate answer the same 256 fresh
    `math_train` problems of levels 3-5 (the next 256 after the bank, outside every set; one answer each at the
    profile's decoding and limit). The largest strength whose mean thinking length is at most 1.18 times the L1 + BR
@@ -79,10 +79,9 @@ on the same columns compose by multiplication, so the two are merged in log spac
 gain set (`python -m wsp.upload l1 EC`: the chain start -> L1 -> EC, local layers carried into one edit). This keeps the
 payload at about 3.8 MB (L1 3.4 MB + one gain set 0.4 MB) instead of 4.2 MB for two separate gain sets.
 
-## 5. Steps (all scripted: `bash submission/derive/run.sh all` from the task directory)
+## 5. Steps
 
-`run.sh` runs each step in order, writes `run_ec/<step>.done`, and resumes after an interruption (run it again; a single
-step: `run.sh <step>`). Log: `run_ec/logs/run.log`.
+
 
 | step | what | GPUs | time (4 x RTX 4090, measured in our rehearsal) |
 |---|---|---|---|
@@ -96,11 +95,8 @@ step: `run.sh <step>`). Log: `run_ec/logs/run.log`.
 
 Total about 5.1 hours on 4 x RTX 4090, leaving time for setup and checks within the 6 hours.
 
-Time guard: `run.sh` counts the 6 hours from its first start. **If time was used before it starts, pass the minutes
-already used**, e.g. `T_OFFSET_MIN=20 bash submission/derive/run.sh all`. EC starts only if at least 150 minutes remain
-(`EC_MIN_LEFT`), otherwise upload 1 stands; the strength screen runs only if at least 50 minutes remain
-(`EC_DOSE_MIN_LEFT`), otherwise strength 0.5. If a step fails, read its log under `run_ec/logs/`, fix the cause (paths, a
-GPU that did not start: rerun the step) and rerun `run.sh all`; done steps are not repeated. Each parallel job uses its
+Time guard: EC starts only if at least 150 minutes remain, otherwise upload 1 stands; the strength screen runs only if at least 50 minutes remain, otherwise strength 0.5. If a step fails, read its log, fix the cause (paths, a
+GPU that did not start: rerun the step). Each parallel job uses its
 own kernel cache (`TRITON_CACHE_DIR`), so jobs that start together on a fresh machine do not race in compilation.
 
 ## 6. What to expect, and what not to do
@@ -108,7 +104,7 @@ own kernel cache (`TRITON_CACHE_DIR`), so jobs that start together on a fresh ma
 - Upload 2's maths should be clearly above upload 1's on held-out practice maths (paired), with lengths somewhat up.
 - Do not override EC's strength chosen by the screen (step 6), and do not drop the 50 % branch point: in our tests the
   version without it neither lengthened the thinking nor helped.
-- Do not shrink the EC data (`EC_BANK`, `EC_ROWS`, `EC_POINTS`) to save time: in our tests a smaller version (130
+- Do not shrink the EC data to save time: in our tests a smaller version (130
   problems, branch points 10 % and 25 % only, about 550 pairs instead of about 1250) gave a much smaller effect.
 - Do not add length-matching to the EC pairs: the window already removes the continuation's length from the loss.
 
