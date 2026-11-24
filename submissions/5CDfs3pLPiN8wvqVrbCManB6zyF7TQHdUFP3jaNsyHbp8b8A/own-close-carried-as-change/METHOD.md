@@ -265,8 +265,7 @@ tail -n 5 /workspace/work/run_e1/logs/run.log
 submission/derive/run_e1.py status` every 10-15 min with short commands, never one long blocking wait, and keep the
 last step done on PROGRESS.md's first line. Never run `wsp.upload` by hand and never stop the driver (except as in "A stalled step" below): an upload
 started beside the driver's mixes two packages. Start no other GPU job while the driver runs (its runs take every
-GPU). This method's control is the paired practice check of section 3; the skill's shuffled control is not part of
-it, for time. At the 30- and 10-minute reminders, check `status` and let the driver
+GPU). At the 30- and 10-minute reminders, check `status` and let the driver
 finish; an upload starts its checks only with at least 36 minutes left (the null edit 28) and starts sending only
 with 20 (the null edit 12; the unchecked re-send of upload 1 with 8). Run `axonry-done` only once `run.log` shows `RUN_E1_END`, never
 after upload 1.
