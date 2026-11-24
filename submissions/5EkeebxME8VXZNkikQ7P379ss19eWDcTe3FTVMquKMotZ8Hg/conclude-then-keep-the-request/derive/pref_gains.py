@@ -1,0 +1,259 @@
+"""Preference fit of per-unit / per-head gains on answers written after the same thinking.
+
+Pairs come from derive/branch.py output (--kinds if [--if-all]): rows that share a branch point (id, k, point) have
+the same prefix (prompt side: the model's own thinking up to </think>) and differ only in the visible answer. A pair is
+(an answer that passes the item's checker, one that fails), both finished. Loss per pair, on the answer tokens only:
+  -log sigmoid(beta * ((logp(c) - logp0(c)) - (logp(r) - logp0(r)))) + nll_w * NLL(c) / |c|
+logp0: the start model (gains off). Parameters: one multiplicative gain per MLP unit (row of up_proj) and, with
+--heads, per attention head (column block of o_proj / out_proj), in --layers. Saves state.pt in fit_gains' format:
+average several seeds and dose them with `fit_gains.py export --fits F1 F2 ... --k K`.
+
+  python derive/pref_gains.py --model DIR --branches BR.jsonl ... --out fits/P1 [--layers 4-21] [--heads]
+        [--beta 0.1] [--nll-w 0.2] [--max-pairs 2] [--epochs 2] [--accum 4] [--lr 2e-3] [--seed 1] [--exclude ids.json]
+"""
+import argparse
+import collections
+import json
+import random
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fit_gains import heads_of, parse_layers, read_rows  # noqa: E402
+
+
+def make_pairs(rows, max_pairs, rng, exclude, whole=False, bad_cut=False):
+    groups = collections.defaultdict(lambda: ([], []))
+    for r in rows:
+        fin = r.get("finish") == "stop"
+        if r["id"] in exclude or (not fin and not bad_cut) or (
+                not whole and "</think>" in (r["text"][len(r.get("prefix", "")):])):
+            continue
+        good, bad = groups[(r["id"], r["k"], r.get("point"))]
+        (good if fin and r.get("correct") else bad).append(r)
+    pairs = []
+    for key, (good, bad) in groups.items():
+        if not good or not bad:
+            continue
+        rng.shuffle(good)
+        rng.shuffle(bad)
+        for i in range(min(max_pairs, max(len(good), len(bad)))):
+            pairs.append((good[i % len(good)], bad[i % len(bad)]))
+    rng.shuffle(pairs)
+    return pairs, len(groups)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--branches", nargs="+", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--layers", default="4-21")
+    ap.add_argument("--heads", action="store_true")
+    ap.add_argument("--beta", type=float, default=0.1)
+    ap.add_argument("--nll-w", type=float, default=0.2)
+    ap.add_argument("--max-pairs", type=int, default=2)
+    ap.add_argument("--epochs", type=int, default=2)
+    ap.add_argument("--accum", type=int, default=4)
+    ap.add_argument("--lr", type=float, default=2e-3)
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--max-len", type=int, default=12288)
+    ap.add_argument("--chunk", type=int, default=1024)
+    ap.add_argument("--exclude", nargs="*")
+    ap.add_argument("--limit", type=int)
+    ap.add_argument("--keep", nargs="*", help="the start model's own finished answers (wsp.gen rows, any task) held at "
+                    "the start model: KL(p0 || p) over the vocabulary at their positions (thinking and answer), mean "
+                    "per position, one row per pair")
+    ap.add_argument("--keep-w", type=float, default=0.0)
+    ap.add_argument("--keep-len", type=int, default=4096, help="generated tokens of a keep row that count")
+    ap.add_argument("--keep-from", type=int, default=0, help="first generated position of a keep row in the KL")
+    ap.add_argument("--keep-any", action="store_true", help="keep rows need not be finished (thinking held as it runs)")
+    ap.add_argument("--keep-every", type=int, default=1, help="a keep row with every N-th pair")
+    ap.add_argument("--no-eot", action="store_true", help="the continuation does not end the turn (openings)")
+    ap.add_argument("--items", nargs="*", help="files of further items (requests made in the run)")
+    ap.add_argument("--whole", action="store_true", help="pairs are two whole answers of one problem, thinking included "
+                    "(rows with an empty prefix, from derive/ec_select.py)")
+    ap.add_argument("--bad-cut", action="store_true", help="a continuation cut at the token limit counts as failed")
+    ap.add_argument("--window", type=int, default=0, help="if > 0: only the first N tokens after the branch point are in "
+                    "the preference (the stretch where the outcome is decided)")
+    ap.add_argument("--norm-beta", type=float, default=0.0, help="if > 0: margin = this * (mean change of log p per token "
+                    "of the preferred answer - the same of the rejected one), for answers of different lengths")
+    a = ap.parse_args()
+
+    import torch
+    import torch.nn.functional as F
+    from torch.utils.checkpoint import checkpoint
+    from wsp import data
+    from wsp.probe import decoder, load_model
+
+    torch.manual_seed(a.seed)
+    rng = random.Random(a.seed)
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    exclude = set()
+    for p in a.exclude or []:
+        exclude |= set(json.load(open(p)))
+    pairs, n_groups = make_pairs(read_rows(a.branches), a.max_pairs, rng, exclude, a.whole, a.bad_cut)
+    if a.limit:
+        pairs = pairs[: a.limit]
+    by_src = collections.Counter(g.get("source") for g, _ in pairs)
+    print(f"[pref] {len(pairs)} pairs from {n_groups} branch points {dict(by_src)}", flush=True)
+    keep = []
+    if a.keep and a.keep_w > 0:
+        keep = [r for r in read_rows(a.keep) if r["id"] not in exclude
+                and (a.keep_any or (r.get("finish") == "stop" and r.get("think_closed")))]
+        rng.shuffle(keep)
+        print(f"[pref] {len(keep)} keep rows {dict(collections.Counter(r.get('source') for r in keep))}, "
+              f"weight {a.keep_w}", flush=True)
+    if not pairs:
+        raise SystemExit("no pairs")
+
+    model, tok = load_model(a.model)
+    for p in model.parameters():
+        p.requires_grad_(False)
+    cfg = model.config.get_text_config()
+    owner, layers = decoder(model)
+    names = {m: n for n, m in model.named_modules()}
+    L = parse_layers(a.layers)
+    dev = next(model.parameters()).device
+    mlp = {i: torch.zeros(layers[i].mlp.up_proj.out_features, device=dev, requires_grad=True) for i in L}
+    head = {}
+    on = [True]
+    hooks = []
+    meta = {"layers": L, "mlp_tensor": {}, "head_tensor": {}, "head_dim": {}, "n_heads": {}}
+    for i in L:
+        up = layers[i].mlp.up_proj
+        meta["mlp_tensor"][i] = names[up] + ".weight"
+        hooks.append(up.register_forward_hook(lambda m, inp, o, i=i: o * torch.exp(mlp[i]).to(o.dtype) if on[0] else o))
+        if a.heads:
+            proj, H, hd = heads_of(layers[i], cfg)
+            head[i] = torch.zeros(H, device=dev, requires_grad=True)
+            meta["head_tensor"][i], meta["head_dim"][i], meta["n_heads"][i] = names[proj] + ".weight", hd, H
+
+            def pre(m, args, i=i, hd=hd):
+                if not on[0]:
+                    return None
+                x = args[0]
+                return (x * torch.exp(head[i]).to(x.dtype).repeat_interleave(hd),) + tuple(args[1:])
+            hooks.append(proj.register_forward_pre_hook(pre))
+    params = list(mlp.values()) + list(head.values())
+    opt = torch.optim.Adam(params, lr=a.lr)
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.train()
+    lm_head = model.get_output_embeddings()
+    idx = data.by_id()
+    for p in a.items or []:      # requests made in the run (derive/mkreq.py): items outside the toolkit's index
+        idx.update({it["id"]: it for it in json.load(open(p))})
+    eot = tok.convert_tokens_to_ids("<|im_end|>")
+
+    def encode(r):
+        prompt = tok.apply_chat_template([{"role": "user", "content": data.user_message(idx[r["id"]], None)}],
+                                         tokenize=False, add_generation_prompt=True, enable_thinking=True)
+        p = tok(prompt, add_special_tokens=False).input_ids
+        pre = tok(r["prefix"], add_special_tokens=False).input_ids
+        ans = tok(r["text"][len(r["prefix"]):], add_special_tokens=False).input_ids + ([] if a.no_eot else [eot])
+        if a.window > 0:
+            ans = ans[: a.window]
+        ids = (p + pre + ans)[: a.max_len]
+        return torch.tensor(ids, device=dev), len(p) + len(pre)
+
+    def encode_keep(r):
+        prompt = tok.apply_chat_template([{"role": "user", "content": data.user_message(idx[r["id"]], None)}],
+                                         tokenize=False, add_generation_prompt=True, enable_thinking=True)
+        p = tok(prompt, add_special_tokens=False).input_ids
+        gen = (tok(r["text"], add_special_tokens=False).input_ids + [eot])[: a.keep_len]
+        return torch.tensor((p + gen)[: a.max_len], device=dev), len(p)
+
+    def lp_chunk(h, t):
+        return -F.cross_entropy(lm_head(h).float(), t, reduction="sum")
+
+    def seq_logp(ids, start, grad):
+        """Sum of log p of the answer tokens (positions start..end) under the current gains (on[0])."""
+        if grad:
+            hs = model.model(input_ids=ids[None], use_cache=False).last_hidden_state[0]
+        else:
+            with torch.no_grad():
+                hs = model.model(input_ids=ids[None], use_cache=False).last_hidden_state[0]
+        tot = 0.0
+        for s in range(start - 1, len(ids) - 1, a.chunk):
+            e = min(s + a.chunk, len(ids) - 1)
+            if grad:
+                tot = tot + checkpoint(lp_chunk, hs[s:e], ids[s + 1:e + 1], use_reentrant=False)
+            else:
+                with torch.no_grad():
+                    tot = tot + lp_chunk(hs[s:e], ids[s + 1:e + 1])
+        return tot, len(ids) - start
+
+    def kl_chunk(h_off, h_on):
+        lo = F.log_softmax(lm_head(h_off).float(), -1)
+        ln = F.log_softmax(lm_head(h_on).float(), -1)
+        return (lo.exp() * (lo - ln)).sum()
+
+    def seq_kl(ids, start):
+        """Mean over the generated positions (from --keep-from on) of KL(p0 || p) over the whole vocabulary (exact)."""
+        on[0] = False
+        with torch.no_grad():
+            h0 = model.model(input_ids=ids[None], use_cache=False).last_hidden_state[0]
+        on[0] = True
+        h1 = model.model(input_ids=ids[None], use_cache=False).last_hidden_state[0]
+        start = min(start + a.keep_from, len(ids) - 1)
+        tot, n = 0.0, len(ids) - start
+        for s in range(start - 1, len(ids) - 1, a.chunk):
+            e = min(s + a.chunk, len(ids) - 1)
+            tot = tot + checkpoint(kl_chunk, h0[s:e], h1[s:e], use_reentrant=False)
+        return tot / max(1, n)
+
+    t0, run, acc_run, step = time.time(), [], [], 0
+    kl_run, ki = [], 0
+    total = len(pairs) * a.epochs
+    for ep in range(a.epochs):
+        rng.shuffle(pairs)
+        for j, (good, bad) in enumerate(pairs):
+            gi, gs = encode(good)
+            bi, bs = encode(bad)
+            if gs >= len(gi) - 1 or bs >= len(bi) - 1:
+                continue
+            on[0] = False
+            lg0, _ = seq_logp(gi, gs, False)
+            lb0, _ = seq_logp(bi, bs, False)
+            on[0] = True
+            lg, ng = seq_logp(gi, gs, True)
+            lb, nb = seq_logp(bi, bs, True)
+            if a.norm_beta > 0:
+                margin = a.norm_beta * ((lg - lg0.detach()) / max(1, ng) - (lb - lb0.detach()) / max(1, nb))
+            else:
+                margin = a.beta * ((lg - lg0.detach()) - (lb - lb0.detach()))
+            loss = -F.logsigmoid(margin) + a.nll_w * (-lg / max(1, ng))
+            if keep and j % a.keep_every == 0:
+                ki_ids, ki_s = encode_keep(keep[ki % len(keep)])
+                ki += 1
+                kl = seq_kl(ki_ids, ki_s)
+                loss = loss + a.keep_w * kl
+                kl_run.append(float(kl))
+            (loss / a.accum).backward()
+            run.append(float(loss))
+            acc_run.append(float(margin > 0))
+            if (j + 1) % a.accum == 0 or j == len(pairs) - 1:
+                opt.step()
+                opt.zero_grad(set_to_none=True)
+                step += 1
+            done = ep * len(pairs) + j + 1
+            if done % 40 == 0 or done == total:
+                el = time.time() - t0
+                spread = max(float(q.detach().abs().max()) for q in params)
+                kls = f" keep-kl {sum(kl_run[-40:]) / len(kl_run[-40:]):.5f}" if kl_run else ""
+                print(f"[pref] {done}/{total} loss {sum(run[-40:]) / len(run[-40:]):.4f} "
+                      f"pref-acc {sum(acc_run[-40:]) / len(acc_run[-40:]):.2f}{kls} max|log g| {spread:.4f} "
+                      f"{el / 60:.1f} min, eta {el / done * (total - done) / 60:.1f} min", flush=True)
+    for h in hooks:
+        h.remove()
+    torch.save({"mlp": {i: t.detach().cpu() for i, t in mlp.items()},
+                "head": {i: t.detach().cpu() for i, t in head.items()}, "meta": meta,
+                "args": vars(a), "n_answers": len(pairs),
+                "by_source": dict(by_src)}, out / "state.pt")
+    print(f"[pref] saved {out / 'state.pt'} ({(time.time() - t0) / 60:.1f} min)", flush=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
