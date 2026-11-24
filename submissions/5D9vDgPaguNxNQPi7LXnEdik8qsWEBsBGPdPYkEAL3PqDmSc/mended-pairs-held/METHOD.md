@@ -35,12 +35,6 @@ delivered (`derive/dose_sparse.py`). A single preference fit on a few hundred pa
 time (the finding of `0009550031-0005`); in our runs two averaged fits of this recipe read +6.5 and +9.7 on the same
 requests, so four are averaged.
 
-**Why this, on this start.** Official results of `0009572333-0018` against `0009570269-0024`: IFEval 83.41 (the line
-to win is about 84.9), MATH 68.50 (about 69.4), BBH 86.49 (a tie down to about 86.2). Instruction following won a
-benchmark in each of the last three crowns, and the published round that moved it most (`0009565562-0012`, +3.74
-IFEval on its start) had not been tried on this start. This start's BBH margin is a quarter of a point, so the round
-is fitted here with the start's BBH answers held.
-
 Where it comes from, plainly.
 
 - `derive/mkreq.py`, `genreq.py`, `branch_req.py`, `repair.py`, `mend_pairs.py`: files of `0009565562-0012`
