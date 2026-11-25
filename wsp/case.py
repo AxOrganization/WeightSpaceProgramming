@@ -12,7 +12,7 @@ regenerated cheaply and stays useful is kept in git; everything else is reproduc
     results/<model>__<set>.json    {"summary", "paired"}; <model>__selectivity.json; directions.json (per layer)
     NOTES.md                   decisions, by hand
   generated, not kept: RESULTS.md (`report`; the evidence table in playbook.md is the one generated view in git)
-  scratch in $WSP_WORK: runs/<case>/<model>__<set>[.branches].jsonl, cases/<case>/{pairs*.json,directions.npz,
+  scratch in $WSP_WORK: runs/<case>/<model>__<set>[.branches[-think]].jsonl, cases/<case>/{pairs*.json,directions.npz,
     fits/} (edits carry the directions, neurons and values they use), models/<case>__<model>/
 <model> is "base" or an edit name, optionally with sampling overrides "<model>@key=value,..." (a decoding baseline,
 paired with the plain base run); <set> is a case set or subset name, or `bench:<name>`. Generation uses every visible
@@ -27,6 +27,7 @@ import shutil
 
 from . import data, profiles
 from .common import CASES, MODELS, REPO, RUNS, WORK, read_json, read_jsonl, write_json, write_jsonl
+from .grade import THINK_END
 from .stats import paired, summarize
 
 BASE = "base"
@@ -156,7 +157,7 @@ def _base_run_for(case, keys, tag):
     covering them (e.g. base__dev covers dev128). Variants of a set share ids (e.g. bench:<name>_sug), so the
     same set must win."""
     same = run_path(case, BASE, tag)
-    others = sorted((p for p in (RUNS / case).glob(f"{BASE}__*.jsonl") if not p.stem.endswith(".branches")),
+    others = sorted((p for p in (RUNS / case).glob(f"{BASE}__*.jsonl") if ".branches" not in p.stem),
                     key=lambda p: p.stat().st_size)  # branches are answers after one thinking, not samples
     for p in ([same] if same.exists() else []) + [p for p in others if p != same and is_case_set(case, tag)]:
         rows = read_jsonl(p)
@@ -241,13 +242,22 @@ def cmd_run(a):
               f"{_pct(s['acc_when_finished'])}" + (f", pass@{s['samples']} {_pct(s['pass_at_k'])}" if "samples" in s else ""))
 
 
+def _cut_points(text, fracs):
+    """Line breaks nearest to each fraction of a sample's thinking -> {fraction: cut position}: a start that ends
+    between two lines, as the model resumes it."""
+    end = text.index(THINK_END)
+    breaks = [i + 1 for i in range(end) if text[i] == "\n"]
+    return {f: min(breaks, key=lambda i: abs(i - f * end)) for f in fracs} if breaks else {}
+
+
 def cmd_branch(a):
-    """Resample the answer after each sample's own thinking: <model>__<set>.branches.jsonl, --n answers per thinking
-    of the run <from>__<set> (rows: "from_k" the sample whose thinking they share, "k" the branch). Shows whether a
-    failure is made in the answer (mixed groups: the same thinking, answers right and wrong) and gives the pairs of
-    `wsp.fit run --objective pairs`."""
+    """Resample answers from a start taken from the run <from>__<set>: <model>__<set>.branches[-think].jsonl, --n
+    per start (rows: "from_k" the sample the start comes from, "at" where it is cut, "k" the branch, "prefix_chars").
+    --at answer (default): every sample's whole thinking; mixed groups (the same thinking, answers right and wrong)
+    show a failure made in the answer. --at 0.1 0.25 0.5: the thinking cut at those fractions (at a line break) in one
+    passing and one failing sample of every problem that has both; how often each start's continuations end right
+    shows how early a trace is decided. Either way the groups give the pairs of `wsp.fit run --objective pairs`."""
     from .gen import generate  # noqa: PLC0415
-    from .grade import THINK_END  # noqa: PLC0415
 
     prof = profiles.get(conf(a.case)["profile"])
     tag, items = set_items(a.case, a.set)
@@ -256,29 +266,42 @@ def cmd_branch(a):
     if not src.exists():
         raise SystemExit(f"no run {src.stem}: run it first (`wsp.case run {a.case} {a.source or a.model} {a.set}`)")
     idx = {r["id"]: r for r in items}
-    todo = [{**idx[r["id"]], "id": f"{r['id']}#{r['k']}",
-             "prefix": r["text"][:r["text"].index(THINK_END) + len(THINK_END)]}
-            for r in read_jsonl(src) if r["id"] in idx and THINK_END in r["text"]]
-    if not todo:
-        raise SystemExit(f"no sample of {src.stem} closed its thinking")
+    runs = [r for r in read_jsonl(src) if r["id"] in idx and THINK_END in r["text"]]
+    ok = {(r["id"], r["k"]): bool(r["correct"]) and not r["cut"] for r in runs}
+    if a.at == ["answer"]:
+        starts = [(r, "answer", r["text"].index(THINK_END) + len(THINK_END)) for r in runs]
+    else:
+        fracs = [float(f) for f in a.at]
+        by = {}
+        for r in runs:
+            by.setdefault(r["id"], {}).setdefault(ok[(r["id"], r["k"])], r)  # the first passing and failing sample
+        starts = [(r, f, c) for two in by.values() if len(two) == 2 for r in two.values()
+                  for f, c in _cut_points(r["text"], fracs).items()]
+    if not starts:
+        raise SystemExit(f"no start in {src.stem}: no sample closed its thinking"
+                         + ("" if a.at == ["answer"] else ", or no problem has both a passing and a failing one"))
+    todo = [{**idx[r["id"]], "id": f"{r['id']}#{r['k']}#{at}", "prefix": r["text"][:c]} for r, at, c in starts]
     rows = generate(model_path(a.case, name), todo, prof, n=a.n, max_tokens=a.max_tokens, salt="branch",
                     sampling=sampling)
     for r in rows:
-        r["id"], _, k = r["id"].rpartition("#")
-        r["from_k"] = int(k)
-    out = run_path(a.case, a.model, f"{tag}.branches")
+        r["id"], k, at = r["id"].rsplit("#", 2)
+        r["from_k"], r["at"] = int(k), at if at == "answer" else float(at)
+    out = run_path(a.case, a.model, f"{tag}.branches" + ("" if a.at == ["answer"] else "-think"))
     write_jsonl(out, rows)
     groups = {}
     for r in rows:
-        groups.setdefault((r["source"], r["id"], r["from_k"]), []).append(bool(r["correct"]) and not r["cut"])
+        groups.setdefault((r["source"], r["at"], ok[(r["id"], r["from_k"])], r["id"], r["from_k"]), []).append(
+            bool(r["correct"]) and not r["cut"])
     by = {}
-    for (source, *_), v in groups.items():
-        b = by.setdefault(source, [0, 0, 0])
-        b[0 if all(v) else 2 if not any(v) else 1] += 1
-    for source, (ok, mixed, bad) in sorted(by.items(), key=lambda kv: str(kv[0])):
-        n = ok + mixed + bad
-        print(f"{source}: {n} thinkings, answers all right {_pct(ok / n)}, mixed {_pct(mixed / n)}, "
-              f"all wrong {_pct(bad / n)}")
+    for (source, at, from_ok, *_), v in groups.items():
+        b = by.setdefault((str(source), str(at)), {"n": 0, "mixed": 0, True: [], False: []})
+        b["n"] += 1
+        b["mixed"] += 0 < sum(v) < len(v)
+        b[from_ok].append(sum(v) / len(v))
+    for (source, at), b in sorted(by.items()):
+        right = lambda x: _pct(sum(b[x]) / len(b[x])) if b[x] else "-"  # noqa: E731
+        print(f"{source} at {at}: {b['n']} starts, mixed {_pct(b['mixed'] / b['n'])}; continuations right from a "
+              f"passing sample's start {right(True)}, from a failing one's {right(False)}")
     print(out)
 
 
@@ -545,8 +568,11 @@ def main():
     p("branch", case, (["model"], {"help": "base or an edit name: the model that writes the answers"}),
       (["set"], {"help": "case set whose run gives the thinking"}), (["--source"], {"help": "model whose run gives the "
                                                                                   "thinking (default: the same)"}),
-      (["--n"], {"type": int, "default": 4}), (["--max-tokens"], {"type": int, "default": 4096}),
-      help="resample answers after each sample's thinking (answer vs thinking failures; pairs for wsp.fit)")
+      (["--at"], {"nargs": "+", "default": ["answer"], "help": "answer (after the whole thinking) or fractions of the "
+                                                                 "thinking, e.g. 0.1 0.25 0.5"}),
+      (["--n"], {"type": int, "default": 4}),
+      (["--max-tokens"], {"type": int, "help": "default: the profile's (the start counts, as in a full answer)"}),
+      help="resample answers from a start of each sample (answer vs thinking failures; pairs for wsp.fit)")
     p("adopt", case, (["edit"], {"help": "a published edit.json, e.g. the champion's in the task, <sid>/edit/edit.json"}),
       (["--name"], {"default": "champion"}),
       help="add a published edit as a model of the case (to compare against it on the case's sets)")

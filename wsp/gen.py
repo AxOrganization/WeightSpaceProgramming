@@ -7,7 +7,7 @@ import subprocess
 import time
 
 from .common import stable_seed, write_jsonl
-from .data import user_message
+from .data import PRIMES, user_message
 from .grade import score
 
 CONTEXT_MARGIN = 2048  # prompt room on top of max_tokens
@@ -104,8 +104,10 @@ def generate(model, items, profile, n=1, out=None, salt="s0", gpu_mem=0.90, max_
     draws: a run extended later is equivalent to one generated at once, not identical to it.
     sampling: overrides of the profile's sampling (decoding baselines), plus "hint": a data.HINTS name,
     "penalize": words joined by "+" whose first tokens get logit bias "bias" (default -2), "think": 0 / 1 to switch
-    the chat template's thinking mode while keeping the profile's sampling and token limit. An item with a "prefix"
-    continues that start of an answer (a branch); its row's text includes it ("prefix_chars": its length).
+    the chat template's thinking mode while keeping the profile's sampling and token limit, "prime": a data.PRIMES
+    name that opens every answer. An item with a "prefix" continues that start of an answer (a branch); its row's text
+    includes it ("prefix_chars": its length). A given start (prefix, prime) is sampled as part of one full answer: the
+    token limit counts it, and its tokens carry the presence penalty (wsp/prefix_penalty.py).
     The problems are split over the visible GPUs that are free (one vLLM process each, in a process group that is
     killed with the run); to run independent jobs side by side, give each its own CUDA_VISIBLE_DEVICES. The workers
     are spawned: a script calling this must do so under `if __name__ == "__main__":`."""
@@ -148,13 +150,22 @@ def _generate(model, items, profile, n=1, k0=0, salt="s0", gpu_mem=0.90, max_tok
     think = sampling.pop("think", None)
     if think is not None:  # template switch only
         profile = dict(profile, thinking=bool(think))
+    prime = PRIMES[sampling.pop("prime")] if "prime" in sampling else ""
+    if prime and any(r.get("prefix") for r in items):
+        raise SystemExit("a prime opens the answer: it does not combine with branches (items with a prefix)")
     samp = dict(profile["sampling"], **({"max_tokens": max_tokens} if max_tokens else {}), **(sampling or {}))
+    limit = samp.pop("max_tokens")
     # an edited model dir symlinks the base files, so it has the base's tokenizer and chat template
     from transformers import AutoTokenizer  # noqa: PLC0415
     tok0 = AutoTokenizer.from_pretrained(str(model))  # room for the longest prompt (long-context sets)
-    longest = max((len(tok0(user_message(r, hint) + r.get("prefix", "")).input_ids) for r in items), default=0)
-    kw = dict(model=str(model), dtype="bfloat16", max_model_len=samp["max_tokens"] + max(CONTEXT_MARGIN, longest + 256),
+    longest = max((len(tok0(user_message(r, hint)).input_ids) for r in items), default=0)
+    started = prime or any(r.get("prefix") for r in items)  # answers continuing a given start
+    pp = float(samp.get("presence_penalty") or 0.0)
+    kw = dict(model=str(model), dtype="bfloat16", max_model_len=limit + max(CONTEXT_MARGIN, longest + 256),
               gpu_memory_utilization=gpu_mem, enable_prefix_caching=True, seed=0)
+    if started and pp:
+        from .prefix_penalty import PP_KEY, PrefixPresence  # noqa: PLC0415
+        kw["logits_processors"] = [PrefixPresence]
     if _is_multimodal(model):
         kw["limit_mm_per_prompt"] = {"image": 0, "video": 0}
     llm = LLM(**kw)
@@ -166,18 +177,26 @@ def _generate(model, items, profile, n=1, k0=0, salt="s0", gpu_mem=0.90, max_tok
     for r in items:
         prompt = tok.apply_chat_template([{"role": "user", "content": user_message(r, hint)}], tokenize=False,
                                          add_generation_prompt=True, enable_thinking=profile["thinking"])
-        prompt += r.get("prefix", "")  # a branch: the sample continues the given start of an answer
-        reqs += [(r, k, prompt) for k in range(k0.get(r["id"], 0) if isinstance(k0, dict) else k0, n)]
+        pre = prime + r.get("prefix", "")  # the sample continues this start of an answer (a prime, a branch's prefix)
+        # sampled as part of one full answer: the token limit counts the start, and so does the presence penalty
+        sp = dict(samp, max_tokens=limit)
+        if pre:
+            n_prompt = len(tok(prompt, add_special_tokens=False).input_ids)
+            sp["max_tokens"] = max(1, limit - (len(tok(prompt + pre, add_special_tokens=False).input_ids) - n_prompt))
+            if pp:
+                sp["extra_args"] = {PP_KEY: n_prompt, "pp": pp}
+        reqs += [(r, k, prompt + pre, sp) for k in range(k0.get(r["id"], 0) if isinstance(k0, dict) else k0, n)]
     t0 = time.time()
-    outs = llm.generate([p for _, _, p in reqs], [SamplingParams(seed=stable_seed(r["id"], k, salt), **samp)
-                                                  for r, k, _ in reqs])
+    outs = llm.generate([p for _, _, p, _ in reqs], [SamplingParams(seed=stable_seed(r["id"], k, salt), **sp)
+                                                     for r, k, _, sp in reqs])
     dt = time.time() - t0
     rows = []
-    for (r, k, _), o in zip(reqs, outs):
+    for (r, k, _, _), o in zip(reqs, outs):
         c, pre = o.outputs[0], r.get("prefix", "")
+        text = prime + pre + c.text
         rows.append({"id": r["id"], "k": k, "source": r.get("source"), "gold": r.get("answer"),
                      "n_tokens": len(c.token_ids), "finish": c.finish_reason,
-                     **score(r, pre + c.text, c.finish_reason, profile["thinking"]), "text": pre + c.text,
+                     **score(r, text, c.finish_reason, profile["thinking"]), "text": text,
                      **({"prefix_chars": len(pre)} if pre else {})})
     ntok = sum(r["n_tokens"] for r in rows)
     print(f"[gen] {len(rows)} answers, {ntok} tokens in {dt:.0f}s ({ntok / max(dt, 1):.0f} tok/s)", flush=True)

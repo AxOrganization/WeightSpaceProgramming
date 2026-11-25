@@ -17,6 +17,7 @@ wsp/            toolkit (python -m wsp.<module> -h for each CLI)
   data.py       practice sets (no benchmarks)              grade.py  graders, failure kinds
   puzzles.py    generated reasoning puzzles (practice:bbhsynth)
   gen.py        vLLM generation with per-problem seeds      stats.py  summaries, paired comparisons
+  prefix_penalty.py  presence penalty over a continued start (branches, primes)
   probe.py      teacher-forced activation / log-prob reads  directions.py  contrast pairs, directions, writers
   edits.py      declarative edit specs -> model dir + manifest (stacking on a parent)
   upload.py     deliverables -> R2 by the upload protocol   rules.py  loads rules.json, renders "Protocol" below

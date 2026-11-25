@@ -180,3 +180,102 @@ def test_examples_by_objective(tmp_path, monkeypatch):
     assert len(ex) == 1 and ex[0]["kind"] == "pair"  # one passing branch: one pair
     w = ex[0]["win"]
     assert "".join(map(chr, w["ids"][w["start"]:w["stop"]])) == " a0E"  # credit after the shared thinking
+
+
+def test_units_fit_and_spec_build_the_fitted_model(tmp_path, tiny_lm, monkeypatch):
+    """Rewritten MLP units: chosen by gradient outside the units the start's chain rewrote; the spec (start values plus
+    the deltas, float16) builds the hooked model; averaging takes the union, dose scales, shuffle moves the deltas."""
+    from wsp import case as C
+    from wsp import fit, profiles
+    from wsp.edits import build
+
+    model, base = tiny_lm
+    d = tmp_path / "cases" / "c"
+    (d / "edits").mkdir(parents=True)
+    (d / "case.json").write_text(json.dumps({"profile": "tiny", "parent": None}))
+    monkeypatch.setattr(C, "CASES", tmp_path / "cases")
+    monkeypatch.setattr(profiles, "base_dir", lambda name: base)
+    chain = d / "edits" / "P.json"
+    chain.write_text(json.dumps({"name": "P", "base": "tiny", "ops": [
+        {"op": "set_cols", "tensor": "model.layers.1.mlp.down_proj.weight", "cols": [0, 1, 2],
+         "values": [[0.0] * 3] * 16},
+        {"op": "set_rows", "tensor": "model.layers.0.mlp.up_proj.weight", "rows": [5], "values": [[0.0] * 16]}]}))
+    exclude = fit.chain_units(chain)
+    assert exclude == {1: {0, 1, 2}, 0: {5}}
+
+    rng = np.random.default_rng(0)
+    ex = [{"kind": "nll", "w": 1.0, "ids": (rng.integers(0, 8, 6).tolist() * 4), "start": 6, "stop": 24}
+          for _ in range(4)]
+    mlps, chosen = fit.choose_units(model, ex, [0, 1], 10, exclude, (1.0, 0.1, 1.0, 0.0))
+    assert sum(map(len, chosen.values())) == 10
+    assert not set(chosen.get(1, [])) & {0, 1, 2} and 5 not in chosen.get(0, [])
+    H = fit._Head(model)
+    with torch.no_grad():
+        before = float(np.mean([float(-H.logp(e)[0].mean()) for e in ex]))
+    params = fit.Units(mlps, chosen, "cpu")
+    fit.train(model, ex, params, lr=2e-2, epochs=8, accum=2, log_every=100)
+    with torch.no_grad():
+        after = float(np.mean([float(-H.logp(e)[0].mean()) for e in ex]))
+        ids = torch.tensor([ex[0]["ids"]])
+        want = model(ids).logits
+    vals = params.values()
+    params.remove()
+    assert after < before - 0.05
+
+    meta = {"params": "units", "excluded": {"0": [5], "1": [0, 1, 2]}}
+    spec = fit.write_spec("c", "U", vals, meta)
+    assert {o["op"] for o in json.loads(spec.read_text())["ops"]} == {"set_rows", "set_cols"}
+    out, _ = build(spec, tmp_path / "built", base_dir=base)
+    with torch.no_grad():
+        got = transformers.Qwen2ForCausalLM.from_pretrained(out).eval()(ids).logits
+    assert torch.allclose(want, got, atol=2e-2)
+
+    half = {k: v for k, v in vals.items()}  # a second fit with other units: the mean over the union
+    m0 = next(k.removesuffix("|units") for k in vals if k.endswith("|units"))
+    mean = fit._mean_units([vals, {k: v for k, v in half.items() if not k.startswith(m0)}])
+    assert np.allclose(mean[f"{m0}|gate"], vals[f"{m0}|gate"] / 2)
+    z, zr, z0 = (np.load(fit.write_spec("c", n, vals, meta, dose=x).with_suffix(".npz"))
+                 for n, x in (("U1", 1.0), ("U_rev", -1.0), ("U0", 0.0)))
+    assert np.allclose(z["gate0"] + zr["gate0"], 2 * z0["gate0"], atol=1e-2)  # a negative dose reverses the deltas
+    for _ in range(5):
+        zs = np.load(fit.write_spec("c", "U_shuf", vals, meta, shuffle=True).with_suffix(".npz"))
+        for j, m in enumerate(sorted(k.removesuffix("|units") for k in vals if k.endswith("|units"))):
+            assert not set(zs[f"units{j}"].tolist()) & set(meta["excluded"][m.split(".")[1]])
+
+
+def test_window_and_starts_inside_the_thinking(tmp_path, monkeypatch):
+    """--window caps the credited tokens; continuations of different starts of one sample are separate groups."""
+    from wsp import case as C
+    from wsp import data, fit
+
+    items = {"m0": {"id": "m0", "source": "math", "task": "math", "problem": "q", "answer": "1"}}
+    monkeypatch.setattr(data, "by_id", lambda: items)
+    monkeypatch.setattr(C, "CASES", tmp_path / "cases")
+    monkeypatch.setattr(C, "RUNS", tmp_path / "runs")
+    (tmp_path / "cases" / "c" / "sets").mkdir(parents=True)
+    think = "a\nbb\nccc\n</think> x"
+    rows = [{"id": "m0", "k": b, "from_k": 0, "source": "math", "correct": b % 2 == 0, "cut": False, "at": at,
+             "prefix_chars": c, "text": think[:c] + f"y{b}" * 5} for at, c in ((0.25, 2), (0.5, 5)) for b in range(2)]
+    (tmp_path / "runs" / "c").mkdir(parents=True)
+    (tmp_path / "runs" / "c" / "base__fit.branches.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+
+    class Tok:
+        all_special_ids, eos_token = [], "E"
+
+        def apply_chat_template(self, msgs, tokenize=False, add_generation_prompt=True, enable_thinking=True):
+            return "P:" + msgs[0]["content"]
+
+        def __call__(self, text, add_special_tokens=True):
+            return type("T", (), {"input_ids": [ord(ch) for ch in text]})()
+    ex, _ = fit.examples("c", ["base__fit.branches"], Tok(), {"thinking": True}, "pairs", window=4)
+    assert len(ex) == 2  # one pair per start
+    for e in ex:
+        w = e["win"]
+        assert "".join(map(chr, w["ids"][w["start"]:w["stop"]])) == "y0y0"  # after the start, 4 tokens
+
+
+def test_cut_points_end_a_line():
+    from wsp.case import _cut_points
+    text = "one\ntwo two\nthree three three\n</think> 7"
+    cuts = _cut_points(text, [0.1, 0.5])
+    assert all(text[c - 1] == "\n" for c in cuts.values()) and cuts[0.1] < cuts[0.5] <= text.index("</think>")

@@ -75,8 +75,10 @@ You are the editor: you decide what to change from measurements of what parts of
    When the failure has no stable direction but the model often solves a problem in some samples and not in
    others (`pass_at_k` well above `acc` in a run with `--n 4`), fit on its own samples: `split <case> fit --n 1024`,
    `run <case> base fit --n 4`, then `python -m wsp.fit run` (`-h`: passing answers, advantages or passing vs
-   failing pairs; per-unit gains or singular-value scales; `branch` resamples answers after the same thinking).
-   Fit several seeds and average them (`wsp.fit spec`), and run the shuffled control.
+   failing pairs; per-unit gains, singular-value scales or rewritten MLP units; `branch` resamples from a start:
+   after the whole thinking, or `--at` points inside it, where traces are decided; `@prime=` opens the thinking
+   with a way of working that a fit can distil). Fit several seeds and average them (`wsp.fit spec`), and run the
+   shuffled control.
 6. **Freeze** the best edit (`freeze <case> <edit>`), then `run <case> base holdout256` and `run <case> <edit>
    holdout256`.
 7. **Deliver**: `report`, update NOTES (and `playbook.md` outside competition tasks), then the final

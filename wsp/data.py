@@ -181,6 +181,17 @@ HINTS = {
     "irrelevant": "The problem may contain irrelevant information; use only what the question needs.",
 }
 
+# Openings of the answer in the model's own voice (`run ... base@prime=<name>`): the answer starts with the sentence
+# and the model continues it. A prime is part of the sample, not of the prompt, so a fit on primed runs moves the
+# model to open that way unprompted (`wsp.fit --window`: the opening and what follows it).
+PRIMES = {
+    "plan": "First, recall how to solve this kind of problem: I restate exactly what is asked, choose a method, work "
+            "it out step by step with exact values (fractions and radicals rather than decimals), check the result "
+            "against every condition of the problem, and give it in simplest form in \\boxed{}.\n\n",
+    "brief": "First, recall how to work efficiently: I keep the working short, do not repeat a check I have already "
+             "done, and once a result is checked I write it in \\boxed{}.\n\n",
+}
+
 
 def user_message(item, hint=None):
     msg = PROMPTS[item.get("task", "math")].format(**{**item, "problem": item["problem"].rstrip()})

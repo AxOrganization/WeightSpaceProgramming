@@ -62,7 +62,9 @@ base@hint=<name> <set>`). Status of the routes below on Qwen3.5-0.8B thinking:
   (7-20% of math answers), and closers at that cut share gain nothing ("Closing thinking that runs long").
 - **Open** - most misses are now finished wrong answers. Fitting on the model's own samples is the route with
   confirmed HOLDOUT gains; it is bounded by pass@k, not by a failure share, so measure pass@k (and, for answer
-  fits, the mixed share of `branch`) on the start first. Unsettled there: how much of the IF gain is the branch
+  fits, the mixed share of `branch`) on the start first. Rounds on the answer exhaust it (see "Fitting on the
+  model's own samples"): the room left is inside the thinking, where traces are decided early (`branch --at`) and
+  where a way of working can be primed and distilled (`@prime=`). Unsettled: how much of the IF gain is the branch
   pairs and how much the KL tether, and how to keep math from dropping while fitting other sources (`--anchor`).
 - **Dead ends** - "Tried and not confirmed" below; do not repeat them without a new idea.
 
@@ -89,6 +91,8 @@ are hard problems cut at 32k (long reasoning, not loops); Qwen3.5-4B thinking is
   task type: at ~32 problems per source the per-source SE is 5-8 points, so a per-source check needs more problems
   per source, and an accept/reject floor per source must scale with its SE.
 - Compare edits only paired; unpaired passes of 128 answers are ~4 points noisy.
+- Gate a delivery on harm, not on a gain: when the effect is about one SE, "deliver only if every check is up" is a
+  coin flip per check and usually delivers nothing; hold back an edit that loses beyond ~2 SE on some source.
 - Before writing a decoding change into the weights (a logit bias, a forced close), measure it at decoding
   (`base@penalize=...`, `base@hint=...`): an edit that applies it everywhere should not beat it, so a larger gain is
   likely noise; only a gate that applies it where it helps can do better.
@@ -132,6 +136,25 @@ against its wrong ones) moves it toward its better samples (`wsp.fit`; `wsp.case
   branch tokens only, gains of ~650 MLP units, four seeds averaged at dose 0.35, HOLDOUT +7.5 ± 2.1 (tuluif +22.5,
   ifsynth +10.0, math -1.2); in another run at dose 0.5, HOLDOUT ifsynth +1.8 ± 1.8, mmlupro +4.7 ± 1.9, math -2.1
   ± 1.7. In a related fit the KL tether alone moved tuluif as much as the pairs (+3.7 vs +3.5 ± 1.4).
+- **Early decisions inside the thinking.** A passing and a failing trace of one problem, each cut at 10/25/50% of
+  its thinking and continued: the passing trace's starts end right 48/55/62% of the time, the failing one's
+  38/34/30% (math levels 4-5), so most traces are decided well before they end; a failing trace restarted at
+  25/50/75% ends right 31/24/20% against 50% from scratch. Pairs of continuations of one start (`branch --at`,
+  DPO + NLL on the first 2048 tokens after it: `--window`, gains of MLP units and heads in layers 4-21, seeds
+  averaged): math practice +2.8 ± 0.6 at dose 1.0 (1200 problems x 4), +0.8 to +1.0 at 0.5; puzzles, IF and
+  mmlupro within noise.
+- **Distilling a primed way of working.** Opening the thinking with one sentence in the model's own voice
+  (`data.PRIMES` "brief", "plan") lifts math practice +3.0 to +4.6 when forced, but forced everywhere it costs
+  puzzles (89 -> 77) and IF (-5). Fitting the right primed answers' first 160 tokens after the plain question
+  (`run base@prime=brief`, then `fit --objective sft --window 160 --params units --units 64-128`, other sources
+  held with `--anchor`) kept the gain where it helps: math +2.4 and +3.5 ± 1.1 in rehearsals, +0.9 ± 1.1 on a
+  stacked start, puzzles -0.7 to -1.3. Distilling the right answers without the sentence lost (-1.3, -2.2), and so
+  did a primed procedure for IF (-5.3) or word problems (-1.2).
+- **Rounds on the answer run dry.** After a few IF answer rounds the mixed share of answer branches is 3-5%, and of
+  1,589 remaining IF failures 1,133 had no passing branch (the failure is made in the thinking); a further IF round
+  on a start that carries one gained nothing (held-out requests -1.3 ± 1.0). Holding the other sources (KL to the
+  start's own answers over the whole vocabulary, `--anchor`) cut an IF round's puzzle cost by about two thirds
+  (-1.4 -> -0.4 to -0.5 ± 0.5) for about half of its IF gain (+16.0 -> +7.6 to +9.7).
 - **Singular-value scales** (`--params svd`: the top 48 of the residual writers in layers 4-21, each an exact
   `dir_ablate` op) fitted by policy gradients stayed near noise on practice: RLOO credited at answer tokens plus a teacher term (JSD to the model shown the
   verified answer) DEV +1.0 ± 1.8, fresh IF practice +1.4 to +3.7 over three candidates; credited at high-entropy
@@ -198,6 +221,11 @@ Paired gains on DEV128 / HOLDOUT256 after the loop edit (2B unless noted).
 - **Non-thinking mode** (0.8B): wrong answers are genuine reasoning errors, no removable failure. Qwen3-0.6B/1.7B
   already reason before answering; "reason step by step" moves MMLU-Pro / BBH by -3 to +3 (300 items), so there is
   no hidden "answers too fast" gap. Their "no answer" share (0.6B: 23-34%) is unboxed answers, a grader matter.
+- **Written workings and rule sentences for single puzzle families** (a program writes each family's working, or a
+  sentence states its rule, fitted into rewritten units): large on the families they are written for (+18 to +22)
+  and nothing elsewhere (other families +0.0 ± 0.9, word problems +0.0, IF -2.3); they teach a family, not reasoning.
+- **Group credit from restarts and RLOO on own math answers**: GRPO on continuations of a wrong trace alone -0.2 ±
+  0.7; RLOO on whole math samples -0.5 to -2.2.
 - **Decoding instead of weights**: repetition penalty 1.1 on the unedited 2B gives +11.7 ± 3.8 on DEV, the weight
   edit +17.2 ± 3.7; the edit is better and needs no change to the sampler, but most of the loop gain is reachable
   by decoding.
