@@ -5,15 +5,23 @@ python -m wsp.rules doc     regenerate the protocol section of README.md from ru
 """
 import re
 import sys
+from pathlib import Path
 
 from .common import REPO, read_json
 
 RULES = read_json(REPO / "rules.json")
 
 
+def payload_limit(base_dir):
+    """The largest payload (bytes) of an edit on the base in `base_dir` (its model files, e.g. profiles.base_dir):
+    max_payload_bytes_per_hidden x the base's hidden size."""
+    cfg = read_json(Path(base_dir) / "config.json")
+    return RULES["edit"]["limits"]["max_payload_bytes_per_hidden"] * cfg.get("text_config", cfg)["hidden_size"]
+
+
 def doc():
     s, e, u = RULES["submission"], RULES["edit"], RULES["upload"]
-    fmt = {"max_payload_bytes": lambda v: f"{v // 1024} KiB"}
+    fmt = {"max_payload_bytes_per_hidden": lambda v: f"{v} bytes x the base's hidden size"}
     limits = ", ".join(f"{k.removeprefix('max_').replace('_', ' ')} <= {fmt.get(k, lambda v: f'{v:.0%}')(v)}"
                        for k, v in e["limits"].items())
 

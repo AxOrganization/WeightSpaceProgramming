@@ -6,7 +6,7 @@ import numpy as np
 
 from wsp import case as wsp_case
 from wsp import upload
-from wsp.rules import RULES, doc
+from wsp.rules import RULES, doc, payload_limit
 
 P, SID = "qwen35-0.8b-think", "0009538688-0019"
 
@@ -128,6 +128,14 @@ def test_protocol():
     assert set(RULES["upload"]["required"]) <= set(RULES["upload"]["files"])
     text = doc()
     assert "payload" in text and RULES["upload"]["schema"] in text
+
+
+def test_payload_limit_grows_with_the_base_width(tmp_path):
+    """4 MiB on the 0.8B (hidden 1024), 8 MiB on the 2B (hidden 2048): read from the base's config."""
+    for hidden in (1024, 2048):
+        (tmp_path / "config.json").write_text(json.dumps({"text_config": {"hidden_size": hidden}}))
+        assert payload_limit(tmp_path) == hidden * 4096
+    assert payload_limit(tmp_path) == 8 << 20
 
 
 def test_report_carries_every_result_and_status_reads_the_upload_back(tmp_path, monkeypatch):

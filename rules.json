@@ -38,10 +38,10 @@
    "set_cols",
    "round"
   ],
-  "payload": "bytes of every distinct array the own ops carry (wsp.edits.spec_size): the information budget, the main guard against importing outside weights or memorized answers",
+  "payload": "bytes of every distinct array the own ops carry (wsp.edits.spec_size): the information budget, the main guard against importing outside weights or memorized answers. Its limit grows with the base's width, so that a base of any size admits the same number of rows, columns or directions: max_payload_bytes_per_hidden x the hidden size of the base (wsp.rules.payload_limit; Qwen3.5-0.8B 4 MiB, Qwen3.5-2B 8 MiB)",
   "relative_change": "per tensor: manifest relative_change_vs_parent; global: sqrt(sum (relative_change_vs_parent * parent_norm)^2) / norm of all editable matrices of the base",
   "limits": {
-   "max_payload_bytes": 4194304,
+   "max_payload_bytes_per_hidden": 4096,
    "max_relative_change_per_tensor": 0.5,
    "max_global_relative_change": 0.2
   }

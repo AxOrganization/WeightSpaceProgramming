@@ -30,7 +30,7 @@ answer that way after the plain question.
    gains  one gain per input column group (an MLP unit, an attention head's block of columns), exactly `scale_cols`.
    svd    one scale per singular value of each matrix's --k largest, sigma_i -> (1 + z_i) sigma_i, |z| <= --zmax: each
           moved component is one `dir_ablate` op (u = u_i, alpha = -z_i), and they commute. Each costs a float16
-          vector of payload (Qwen3.5-0.8B: --k 48 on layers 4-21 fits the limit, all 24 layers do not).
+          vector of payload (Qwen3.5, either size: --k 48 on layers 4-21 fits the limit, all 24 layers do not).
    units  --units whole MLP units rewritten (gate and up rows, down column: `set_rows` / `set_cols`), chosen over
           --layers by the squared loss gradient of those weights on a sample of the examples; never a unit the
           start's chain already rewrote. Each costs 3 float16 vectors of payload.
@@ -58,7 +58,7 @@ from . import data, profiles
 from .common import read_jsonl, write_json
 from .edits import decoder_prefix, spec_size, tensor_index
 from .grade import THINK_END
-from .rules import RULES
+from .rules import payload_limit
 
 DEFAULT_MODULES = ("down_proj", "w2", "output_linear", "o_proj", "out_proj")  # MLP outputs, then attention outputs
 PER_PROBLEM = {"sft": 2, "rloo": 4, "pairs": 2}
@@ -689,7 +689,7 @@ def write_spec(case, name, fit, meta, dose=1.0, levels=256, min_change=0.002, sh
         spec["parent"] = os.path.relpath(C.cdir(case) / c["parent"], d)
     write_json(d / f"{name}.json", spec)
     tensors, payload = spec_size(d / f"{name}.json")
-    limit = RULES["edit"]["limits"]["max_payload_bytes"]
+    limit = payload_limit(profiles.base_dir(c["profile"]))
     print(f"{d / f'{name}.json'}: {len(ops)} ops on {tensors} tensors, payload {payload} bytes"
           f"{' (over the limit: raise --min-change or fit fewer layers)' if payload > limit else ''}; {note}")
     return d / f"{name}.json"
