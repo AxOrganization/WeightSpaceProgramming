@@ -1,0 +1,6 @@
+`derive/inst/` of the finished entry #168 "workings-and-requests-on-164" (0009588957-0032): its instruction stage (our requests of
+own checkable types, answers, branches after `</think>`, preference fits of unit / head gains with a keep term, export, upload).
+Changes (ours): the profile from `WSP_PROFILE` (run_i.py, gen1.py, branch2.py, fit_gains.py); `I_TRAIN`, `I_TOK`, `I_SEEDS` and
+`PAYLOAD_MAX` from the environment (defaults as published: 1000, 12288, 51-54, 4194304; the driver sets 600, 8192, 51-52 and the
+2B limit 8388608); with `FW_WAIT=1` the edit step waits for the puzzle chain's Fw (case pz) while time allows and folds it in, or
+exports I alone on the start when Fw is not there (the published step required F); with no start in task.json the local `parent/edit/` (stage A) is the start.
